@@ -1,7 +1,7 @@
 const state = { documents: [], renewals: [], searchResults: null, selectedWindow: 7, editingId: null, renewingId: null };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const API_BASE = (window.DOC_TRACKER_API_BASE || 'http://127.0.0.1:5051').replace(/\/$/, '');
+const API_BASE = (window.DOC_TRACKER_API_BASE || (location.port === '5500' ? 'http://127.0.0.1:5051' : location.origin)).replace(/\/$/, '');
 const today = new Date();
 today.setHours(0, 0, 0, 0);
 let authenticated = document.body.dataset.authenticated === 'true';

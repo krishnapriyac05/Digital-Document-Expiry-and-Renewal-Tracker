@@ -15,11 +15,11 @@ from pathlib import Path
 from contextlib import contextmanager
 from urllib.parse import unquote, urlparse
 
-from flask import Flask, jsonify, make_response, request, session
+from flask import Flask, jsonify, make_response, render_template, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "documents.db"
+DB_PATH = Path(os.environ.get("DATABASE_PATH", str(BASE_DIR / "documents.db")))
 # Read a simple local .env file for MySQL configuration; never overwrite an
 # environment variable explicitly set by VS Code or the shell.
 ENV_FILE = BASE_DIR / ".env"
@@ -32,9 +32,14 @@ if ENV_FILE.exists():
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 PORT = int(os.environ.get("PORT", "5051"))
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://127.0.0.1:5500")
+SERVE_FRONTEND = os.environ.get("SERVE_FRONTEND", "false").lower() in {"1", "true", "yes"}
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"},
+)
 app.json.sort_keys = False
 
 
@@ -229,7 +234,20 @@ def error(message: str, status: int = 400):
 
 @app.get("/")
 def backend_home():
+    if SERVE_FRONTEND:
+        return render_template("index.html", asset_version="render-production-v1")
     return jsonify({"service": "Document Tracker API", "health": "/api/health", "frontend": FRONTEND_ORIGIN})
+
+
+@app.get("/config.js")
+def frontend_config():
+    # A blank base makes the hosted frontend use its own origin, including its
+    # HTTPS scheme, so browser cookies and API requests stay same-origin.
+    api_base = "" if SERVE_FRONTEND else f"http://127.0.0.1:{PORT}"
+    response = make_response(f"window.DOC_TRACKER_API_BASE = {api_base!r};\n")
+    response.headers["Content-Type"] = "application/javascript; charset=utf-8"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.after_request

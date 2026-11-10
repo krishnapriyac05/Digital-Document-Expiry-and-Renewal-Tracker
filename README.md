@@ -56,10 +56,17 @@ Install Python 3.10 or newer if needed. Install project dependencies with `pytho
 The backend stores account credentials as password hashes, document details (including vehicle insurance and vehicle registration documents), and renewal history. SQLite is the default persistent storage; MySQL can be configured for shared storage. The app binds only to your own computer (`127.0.0.1`).
 
 The app adds four fictional sample documents when the selected database is empty. You can also use **Load fictional examples** in Recent Documents to add them to an existing workspace; duplicate sample names are skipped and existing records are not modified.
+
+## Deploy on Render
+
+The repository includes `render.yaml` for a single Render web service. In Render, choose **New → Blueprint**, connect this GitHub repository, and deploy the `main` branch. The Blueprint serves the UI and API from the same HTTPS URL, initializes the database at startup, and stores SQLite at `/var/data/documents.db` on a persistent disk. After deployment, open the service URL; the health check is `/api/health`.
+
+This SQLite configuration includes a persistent disk, which Render only supports on a paid web service. The service is configured as a single instance to avoid concurrent SQLite writes to a shared disk. Keep the generated `SECRET_KEY` value stable; changing it signs users out. Render deploys later pushes to the connected branch automatically.
 ## Main files
 
 - `app.py` — Flask app, validation, SQLite/MySQL storage, API, and CSV reports
 - `frontend_server.py` — local frontend server on port 5500
+- `render.yaml` — Render web service, health check, secrets, and persistent database disk
 - `migrate_sqlite_to_mysql.py` — one-time migration for existing SQLite documents and renewal history
 - `templates/index.html` — page structure and forms
 - `static/styles.css` — responsive styling
