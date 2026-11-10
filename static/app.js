@@ -1,8 +1,82 @@
 const state = { documents: [], renewals: [], searchResults: null, selectedWindow: 7, editingId: null, renewingId: null };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const API_BASE = (window.DOC_TRACKER_API_BASE || 'http://127.0.0.1:5051').replace(/\/$/, '');
 const today = new Date();
 today.setHours(0, 0, 0, 0);
+let authenticated = document.body.dataset.authenticated === 'true';
+
+document.querySelectorAll('a[href^="/api/"]').forEach(link => {
+  link.href = `${API_BASE}${link.getAttribute('href')}`;
+});
+
+function openAuthDialog(mode) {
+  const dialog = document.getElementById(`${mode}-dialog`);
+  if (!dialog) return;
+  document.querySelectorAll('.auth-dialog').forEach(item => { if (item.open && item !== dialog) item.close(); });
+  if (!dialog.open) dialog.showModal();
+}
+function updateAccount(user) {
+  const name = user?.name || 'My workspace';
+  const initial = name.trim().slice(0, 1).toUpperCase() || 'D';
+  $('#sidebar-user-name').textContent = name;
+  $('#topbar-user-name').textContent = name;
+  $('#user-avatar').textContent = initial;
+  $('#account-avatar').textContent = initial;
+}
+async function enterWorkspace(user) {
+  authenticated = true;
+  document.body.classList.add('app-mode');
+  updateAccount(user);
+  document.querySelectorAll('.auth-dialog').forEach(dialog => dialog.close());
+  $('#login-form').reset(); $('#register-form').reset();
+  history.replaceState(null, '', '#dashboard');
+  setView('dashboard');
+  try {
+    const docs = await request('/api/documents');
+    if (docs.length === 0) await request('/api/demo-data', { method: 'POST' });
+  } catch (err) {
+    toast(`Signed in, but workspace setup failed: ${err.message}`, true);
+  }
+  await loadData();
+}
+document.addEventListener('click', event => {
+  const open = event.target.closest('[data-open-auth]');
+  if (open) { event.preventDefault(); openAuthDialog(open.dataset.openAuth); return; }
+  const change = event.target.closest('[data-auth-switch]');
+  if (change) { event.preventDefault(); openAuthDialog(change.dataset.authSwitch); return; }
+  if (event.target.closest('[data-close-auth]')) document.querySelectorAll('.auth-dialog').forEach(dialog => dialog.close());
+});
+$('#login-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const errorNode = $('#login-error'); errorNode.classList.add('hidden');
+  try {
+    const result = await request('/api/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
+    await enterWorkspace(result.user);
+  } catch (err) { errorNode.textContent = err.message; errorNode.classList.remove('hidden'); }
+});
+$('#register-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const errorNode = $('#register-error'); errorNode.classList.add('hidden');
+  try {
+    const result = await request('/api/register', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
+    event.currentTarget.reset();
+    document.querySelectorAll('.auth-dialog').forEach(dialog => dialog.close());
+    openAuthDialog('login');
+    $('#login-email').value = result.user.email;
+    $('#login-error').textContent = 'Registration successful. Please log in to continue.';
+    $('#login-error').classList.remove('hidden');
+  } catch (err) { errorNode.textContent = err.message; errorNode.classList.remove('hidden'); }
+});
+$('#logout-button').addEventListener('click', async () => {
+  try {
+    await request('/api/logout', { method: 'POST' });
+    authenticated = false;
+    document.body.classList.remove('app-mode');
+    history.replaceState(null, '', '#home');
+    location.reload();
+  } catch (err) { toast(err.message, true); }
+});
 
 function dateText(value, options = { day: 'numeric', month: 'short', year: 'numeric' }) {
   if (!value) return '—';
@@ -29,7 +103,8 @@ function iconFor(type) {
   return '▤';
 }
 async function request(url, options = {}) {
-  const response = await fetch(url, { ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
+  const target = url.startsWith('http') ? url : `${API_BASE}${url}`;
+  const response = await fetch(target, { ...options, credentials: 'include', headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
   const payload = response.status === 204 ? null : await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload?.error || 'Something went wrong. Please try again.');
   return payload;
@@ -88,8 +163,8 @@ async function loadSelectedReport() {
       $('#report-renewal-rows').innerHTML = result.items.map(item => `<tr><td><strong class="report-name">${escapeHtml(item.document_name || 'Removed document')}</strong></td><td>${dateText(item.previous_issue_date)}</td><td>${dateText(item.previous_expiry_date)}</td><td>${dateText(item.new_issue_date)}</td><td>${dateText(item.new_expiry_date)}</td><td>${new Date(`${item.renewed_at.replace(' ', 'T')}Z`).toLocaleDateString()}</td></tr>`).join('');
       $('#report-empty-title').textContent = 'No renewals recorded yet';
       $('#report-empty-copy').textContent = 'Renewed documents will appear here with their previous and new validity dates.';
-      $('#export-report').href = '/api/renewals.csv';
-      $('#export-xlsx').href = '/api/renewals.xlsx';
+      $('#export-report').href = `${API_BASE}/api/renewals.csv`;
+      $('#export-xlsx').href = `${API_BASE}/api/renewals.xlsx`;
     } else {
       const names = { all: 'All documents', active: 'Active documents', expired: 'Expired documents', 7: 'Documents expiring within 7 days', 15: 'Documents expiring within 15 days', 30: 'Documents expiring within 30 days' };
       $('#report-title').textContent = names[filter];
@@ -99,8 +174,8 @@ async function loadSelectedReport() {
       $('#report-rows').innerHTML = result.items.map(doc => `<tr><td class="report-id">DOC${String(doc.id).padStart(3, '0')}</td><td><strong class="report-name">${escapeHtml(doc.name)}</strong></td><td>${escapeHtml(doc.doc_type)}</td><td>${dateText(doc.issue_date)}</td><td>${dateText(doc.expiry_date)}</td><td><strong>${remainingLabel(doc.days_remaining)}</strong></td><td><span class="status-badge ${statusClass(doc.status)}">${escapeHtml(doc.status)}</span></td></tr>`).join('');
       $('#report-empty-title').textContent = 'No matching documents';
       $('#report-empty-copy').textContent = 'There are no records for this report yet.';
-      $('#export-report').href = `/api/report.csv?type=${encodeURIComponent(filter)}`;
-      $('#export-xlsx').href = `/api/report.xlsx?type=${encodeURIComponent(filter)}`;
+      $('#export-report').href = `${API_BASE}/api/report.csv?type=${encodeURIComponent(filter)}`;
+      $('#export-xlsx').href = `${API_BASE}/api/report.xlsx?type=${encodeURIComponent(filter)}`;
     }
     $('#report-empty').classList.toggle('hidden', result.items.length !== 0);
     $$('.report-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.report === filter));
@@ -120,8 +195,8 @@ function renderReport() {
   $('#report-rows').closest('.table-scroll').classList.toggle('hidden', items.length === 0);
   $('#report-empty-title').textContent = 'No matching documents';
   $('#report-empty-copy').textContent = 'There are no records for this report yet.';
-  $('#export-report').href = '/api/report.csv';
-  $('#export-xlsx').href = '/api/report.xlsx';
+  $('#export-report').href = `${API_BASE}/api/report.csv`;
+  $('#export-xlsx').href = `${API_BASE}/api/report.xlsx`;
   $$('.report-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.report === String(state.reportFilter || 'all')));
   if (document.querySelector('#reports-view:not(.hidden)')) loadSelectedReport();
 }
@@ -192,6 +267,7 @@ function toast(message, isError = false) {
 }
 function setView(name, activeAction = '') {
   const viewName = ['dashboard', 'documents', 'renewals', 'reports'].includes(name) ? name : 'dashboard';
+  document.body.classList.add('app-mode');
   $$('.view').forEach(view => view.classList.toggle('hidden', view.id !== `${viewName}-view`));
   $$('.nav-link').forEach(link => {
     const active = activeAction
@@ -331,6 +407,32 @@ $('#status-filter-all').addEventListener('change', render);
 $('#expiry-date').addEventListener('change', () => { $('#expiry-date').setCustomValidity($('#expiry-date').value && $('#issue-date').value && $('#expiry-date').value < $('#issue-date').value ? 'Expiry date cannot be earlier than issue date.' : ''); });
 $('#issue-date').addEventListener('change', () => $('#expiry-date').dispatchEvent(new Event('change')));
 $('#today-label').textContent = today.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-setView(location.hash.slice(1) || 'dashboard');
-window.addEventListener('hashchange', () => setView(location.hash.slice(1) || 'dashboard'));
-loadData();
+function syncPageMode() {
+  const route = location.hash.slice(1);
+  if (['dashboard', 'documents', 'renewals', 'reports'].includes(route)) {
+    if (authenticated) setView(route);
+    else { document.body.classList.remove('app-mode'); openAuthDialog('login'); }
+  } else {
+    document.body.classList.remove('app-mode');
+  }
+}
+window.addEventListener('hashchange', syncPageMode);
+async function bootstrapPage() {
+  try {
+    const result = await request('/api/session');
+    authenticated = Boolean(result.authenticated);
+    if (authenticated && result.user) updateAccount(result.user);
+  } catch (err) {
+    toast('Backend is not responding. Start the Document Tracker backend and reload this page.', true);
+  }
+  syncPageMode();
+  if (authenticated) {
+    const docs = await request('/api/documents').catch(() => null);
+    if (Array.isArray(docs) && docs.length === 0) {
+      try { await request('/api/demo-data', { method: 'POST' }); }
+      catch (err) { toast(`Workspace setup failed: ${err.message}`, true); }
+    }
+    loadData();
+  }
+}
+bootstrapPage();

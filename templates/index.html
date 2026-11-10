@@ -8,10 +8,16 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css', v=asset_version) }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='ui-refresh.css', v=asset_version) }}">
+  <link rel="stylesheet" href="/static/styles.css?v=split-ports-v1">
+  <link rel="stylesheet" href="/static/ui-refresh.css?v=split-ports-v1">
 </head>
-<body>
+<body data-authenticated="false">
+  <section class="landing-page" id="landing-page">
+    <header class="landing-nav"><a class="landing-brand" href="#home"><span class="landing-mark">▦</span><span>DOC<span>TRACKER</span></span></a><nav aria-label="Account"><span class="landing-local-label"><i></i> LOCAL WORKSPACE</span><a class="landing-login" href="#login" data-open-auth="login">Login</a><a class="landing-register" href="#register" data-open-auth="register">Register</a></nav></header>
+    <div class="landing-hero" id="home"><div class="landing-copy"><div class="landing-eyebrow"><span>DOCUMENTS, UNDER CONTROL</span></div><h1>Never miss an<br><span>important date.</span></h1><p>One calm, clear place to track document expiry dates, plan renewals, and keep your records organized.</p><div class="landing-actions"><a class="landing-primary" href="#dashboard">Open my workspace <span>→</span></a><a class="landing-secondary" href="#login" data-open-auth="login">Login</a></div><small><span class="landing-shield">✓</span> Private by design · Saved in your account workspace</small></div><div class="landing-art" aria-label="Illustration of a document and renewal reminder"><div class="landing-glow"></div><div class="landing-orbit orbit-a"></div><div class="landing-orbit orbit-b"></div><div class="landing-document"><div class="document-topline"><i></i><b>YOUR DOCUMENT</b></div><strong>Travel passport</strong><span class="document-line line-long"></span><span class="document-line line-medium"></span><span class="document-line line-short"></span><div class="document-status"><i></i> ACTIVE</div><em>RENEW BY</em><small>30 September 2027</small></div><div class="landing-date"><strong>✓</strong><span><b>Renewal reminder</b><small>Stay ahead of expiry</small></span></div><div class="landing-spark spark-a">✦</div><div class="landing-spark spark-b">✧</div></div></div>
+    <section class="landing-features" aria-label="Tracker features"><article><span class="feature-icon feature-blue">◷</span><div><h2>Expiry at a glance</h2><p>See what is active, expiring soon, and already expired.</p></div></article><article><span class="feature-icon feature-green">↻</span><div><h2>Renewal history</h2><p>Keep a clear record of previous and renewed dates.</p></div></article><article><span class="feature-icon feature-purple">▤</span><div><h2>Simple reports</h2><p>Find records quickly and export reports when needed.</p></div></article></section>
+    <footer class="landing-footer"><span>DOC TRACKER</span><span>Simple document expiry tracking</span></footer>
+  </section>
   <aside class="sidebar">
     <a class="brand" href="#dashboard"><span class="brand-mark">▦</span><span>DOC<span class="brand-light">TRACKER</span></span></a>
     <div class="nav-label">MAIN MENU</div>
@@ -27,13 +33,13 @@
       <a href="#reports" class="nav-link" data-view="reports"><span class="nav-icon">▥</span> Status reports</a>
     </nav>
     <div class="sidebar-bottom">
-      <div class="local-note"><span class="lock-icon">◈</span><div><strong>Private by design</strong><p>Records stay on this computer.</p></div></div>
-      <div class="user-row"><div class="avatar">D</div><div><strong>My workspace</strong><small>Document tracker</small></div><span class="more">···</span></div>
+      <div class="local-note"><span class="lock-icon">◈</span><div><strong>Private workspace</strong><p>Only your account's records.</p></div></div>
+      <div class="user-row"><div class="avatar" id="user-avatar">D</div><div class="user-copy"><strong id="sidebar-user-name">My workspace</strong><small>Document tracker</small></div><button class="signout-button" id="logout-button" type="button" title="Sign out">↪</button></div>
     </div>
   </aside>
 
-  <main class="main-content">
-    <header class="topbar"><div class="top-title">Digital Document Expiry and Renewal Tracker</div><div class="top-actions"><span class="calendar-label">▦</span><span class="today-label" id="today-label"></span><span class="top-divider"></span><span class="account-avatar">D</span><span class="account-copy">Welcome,<strong>My Workspace</strong></span></div></header>
+  <main class="main-content" id="dashboard">
+    <header class="topbar"><div class="top-title">Digital Document Expiry and Renewal Tracker</div><div class="top-actions"><span class="calendar-label">▦</span><span class="today-label" id="today-label"></span><span class="top-divider"></span><span class="account-avatar" id="account-avatar">D</span><span class="account-copy">Welcome,<strong id="topbar-user-name">My workspace</strong></span></div></header>
 
     <section class="view" id="dashboard-view">
       <div class="stat-grid">
@@ -63,6 +69,9 @@
 
   <dialog id="renew-dialog" class="modal"><form id="renew-form"><div class="modal-head"><div><div class="eyebrow">UPDATE VALIDITY</div><h2>Renew document</h2></div><button type="button" class="close-button" data-close-renew aria-label="Close">×</button></div><p class="modal-subtitle" id="renew-document-name">Choose a document and enter its new validity dates. The previous dates will be saved in history.</p><label class="field-label" for="renew-document-select">Document to renew</label><select class="form-input" id="renew-document-select" required></select><div class="date-fields"><div><label class="field-label" for="renew-issue">New issue date</label><input class="form-input" type="date" id="renew-issue" required></div><div><label class="field-label" for="renew-expiry">New expiry date</label><input class="form-input" type="date" id="renew-expiry" required></div></div><div class="form-error hidden" id="renew-error" role="alert"></div><div class="modal-actions"><button type="button" class="button button-quiet" data-close-renew>Cancel</button><button type="submit" class="button button-primary">Save renewal <span>→</span></button></div></form></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="{{ url_for('static', filename='app.js', v=asset_version) }}" defer></script>
+  <dialog id="login-dialog" class="modal auth-dialog"><form id="login-form"><div class="modal-head"><div><div class="eyebrow">WELCOME BACK</div><h2>Log in to your workspace</h2></div><button type="button" class="close-button" data-close-auth aria-label="Close">×</button></div><p class="modal-subtitle">Use your email and password to continue.</p><label class="field-label" for="login-email">Email address</label><input class="form-input" id="login-email" type="email" name="email" autocomplete="email" maxlength="254" required><label class="field-label" for="login-password">Password</label><input class="form-input" id="login-password" type="password" name="password" autocomplete="current-password" required><div class="form-error hidden" id="login-error" role="alert"></div><div class="modal-actions"><button type="submit" class="button button-primary">Login <span>→</span></button></div><p class="auth-switch-copy">New here? <button type="button" data-auth-switch="register">Create an account</button></p></form></dialog>
+  <dialog id="register-dialog" class="modal auth-dialog"><form id="register-form"><div class="modal-head"><div><div class="eyebrow">YOUR OWN WORKSPACE</div><h2>Create an account</h2></div><button type="button" class="close-button" data-close-auth aria-label="Close">×</button></div><p class="modal-subtitle">Your documents will be saved in your account workspace.</p><label class="field-label" for="register-name">Your name</label><input class="form-input" id="register-name" name="name" autocomplete="name" maxlength="80" minlength="2" required><label class="field-label" for="register-email">Email address</label><input class="form-input" id="register-email" type="email" name="email" autocomplete="email" maxlength="254" required><label class="field-label" for="register-password">Password</label><input class="form-input" id="register-password" type="password" name="password" autocomplete="new-password" minlength="8" required><small class="auth-hint">Use at least 8 characters.</small><div class="form-error hidden" id="register-error" role="alert"></div><div class="modal-actions"><button type="submit" class="button button-primary">Register <span>→</span></button></div><p class="auth-switch-copy">Already registered? <button type="button" data-auth-switch="login">Login</button></p></form></dialog>
+  <script src="/config.js"></script>
+  <script src="/static/app.js?v=split-ports-v1" defer></script>
 </body>
 </html>

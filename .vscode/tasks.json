@@ -3,8 +3,8 @@
   "tasks": [
     {
       "label": "Run Document Tracker",
-      "type": "shell",
-      "command": "python app.py",
+      "type": "process",
+      "command": "${workspaceFolder}\\start_tracker.bat",
       "options": {
         "cwd": "${workspaceFolder}"
       },

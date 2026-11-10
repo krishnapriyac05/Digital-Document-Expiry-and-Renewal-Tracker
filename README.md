@@ -1,6 +1,6 @@
 # Validity — Digital Document Expiry and Renewal Tracker
 
-A local browser-based app for tracking document dates. Python/Flask provides the backend, MySQL can store the records when configured, and HTML/CSS/JavaScript provide the interface. SQLite is the zero-configuration local fallback. The app does not store identification numbers, accept document uploads, or connect to government services.
+A browser-based app for tracking document dates. Create an account or log in to open a private workspace; accounts and document records stay in the configured database on this computer. Python/Flask provides the backend, MySQL can store the records when configured, and SQLite is the zero-configuration local fallback. The app does not store identification numbers, accept document uploads, or connect to government services.
 
 ## Project phases
 
@@ -26,33 +26,40 @@ A local browser-based app for tracking document dates. Python/Flask provides the
 - [x] Downloadable CSV exports for each selected status report and renewal history
 - [x] Fictional records only; no document upload or external integration
 
-## Start the app
+## Start the app on Windows
 
-1. Install Python 3.10 or newer if it is not already installed.
-2. Open a terminal in this folder. To use MySQL, copy `.env.example` to `.env`, edit the MySQL username/password and database name, and create the database in MySQL Workbench or your MySQL client. For example: `CREATE DATABASE document_tracker CHARACTER SET utf8mb4;`. The app creates its tables automatically. To move existing SQLite documents and renewals, run `python migrate_sqlite_to_mysql.py` once after configuring `.env`; IDs are preserved and the SQLite file is left unchanged. If `DATABASE_URL` is blank, the app uses `documents.db` (SQLite).
-3. Install the dependencies:
+Double-click `start_tracker.bat`. It checks the Python dependencies, starts the backend and frontend separately, waits for both to respond, and opens the frontend. Keep both server windows open while using the app.
 
-   ```powershell
-   python -m pip install -r requirements.txt
-   ```
+- Frontend: `http://127.0.0.1:5500`
+- Backend health: `http://127.0.0.1:5051/api/health`
 
-4. Start the server:
+To start manually, open two terminals in this folder. In the first terminal, run:
 
-   ```powershell
-   python app.py
-   ```
+```powershell
+$env:PORT = "5051"
+$env:FRONTEND_ORIGIN = "http://127.0.0.1:5500"
+python app.py
+```
 
-5. Open [http://127.0.0.1:5000](http://127.0.0.1:5000) in your browser. Keep the terminal window open while using the app; press Ctrl+C there to stop it.
+In the second terminal, run:
 
-With SQLite, `documents.db` is created beside `app.py`. With MySQL configured, records are stored in your configured MySQL database. The app binds only to your own computer (`127.0.0.1`).
+```powershell
+$env:FRONTEND_PORT = "5500"
+$env:BACKEND_PORT = "5051"
+python frontend_server.py
+```
 
-To confirm which storage the running app is using and how many records it sees, open [http://127.0.0.1:5000/api/health](http://127.0.0.1:5000/api/health). The server terminal also prints the active storage mode at startup.
+Then open `http://127.0.0.1:5500` in your browser. Keep both terminals open while using the app; press Ctrl+C in each to stop the services.
+
+Install Python 3.10 or newer if needed. Install project dependencies with `python -m pip install -r requirements.txt`. If using MySQL, copy `.env.example` to `.env`, configure the database URL, and create the database; the app creates its tables automatically. To move existing SQLite documents and renewals, run `python migrate_sqlite_to_mysql.py` once after configuring MySQL. If `DATABASE_URL` is blank, the app saves data in `documents.db` beside `app.py`.
+
+The backend stores account credentials as password hashes, document details (including vehicle insurance and vehicle registration documents), and renewal history. SQLite is the default persistent storage; MySQL can be configured for shared storage. The app binds only to your own computer (`127.0.0.1`).
 
 The app adds four fictional sample documents when the selected database is empty. You can also use **Load fictional examples** in Recent Documents to add them to an existing workspace; duplicate sample names are skipped and existing records are not modified.
-
 ## Main files
 
 - `app.py` — Flask app, validation, SQLite/MySQL storage, API, and CSV reports
+- `frontend_server.py` — local frontend server on port 5500
 - `migrate_sqlite_to_mysql.py` — one-time migration for existing SQLite documents and renewal history
 - `templates/index.html` — page structure and forms
 - `static/styles.css` — responsive styling

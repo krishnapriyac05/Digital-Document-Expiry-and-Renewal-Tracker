@@ -6,6 +6,7 @@ import csv
 import io
 import os
 import re
+import secrets
 import sqlite3
 import zipfile
 from datetime import date, datetime, timedelta
@@ -14,7 +15,8 @@ from pathlib import Path
 from contextlib import contextmanager
 from urllib.parse import unquote, urlparse
 
-from flask import Flask, jsonify, make_response, render_template, request
+from flask import Flask, jsonify, make_response, request, session
+from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "documents.db"
@@ -28,7 +30,11 @@ if ENV_FILE.exists():
             key, value = line.split("=", 1)
             os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+PORT = int(os.environ.get("PORT", "5051"))
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://127.0.0.1:5500")
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 app.json.sort_keys = False
 
 
@@ -90,8 +96,16 @@ def connect():
 def initialize(seed_empty: bool = True) -> None:
     with connect() as db:
         if DATABASE_URL.startswith(("mysql://", "mysql+pymysql://")):
+            db.execute("""CREATE TABLE IF NOT EXISTS users (
+                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(80) NOT NULL,
+                email VARCHAR(254) NOT NULL UNIQUE,
+                password_hash VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""")
             db.execute("""CREATE TABLE IF NOT EXISTS documents (
                 id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                owner_id INT NULL,
                 name VARCHAR(100) NOT NULL,
                 doc_type VARCHAR(60) NOT NULL,
                 issue_date DATE NOT NULL,
@@ -100,6 +114,7 @@ def initialize(seed_empty: bool = True) -> None:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""")
             db.execute("""CREATE TABLE IF NOT EXISTS renewals (
                 id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                owner_id INT NULL,
                 document_id INT NULL,
                 document_name VARCHAR(100) NOT NULL DEFAULT '',
                 previous_issue_date DATE NOT NULL,
@@ -110,10 +125,21 @@ def initialize(seed_empty: bool = True) -> None:
                 INDEX idx_renewal_document (document_id),
                 INDEX idx_renewal_time (renewed_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""")
+            for table in ("documents", "renewals"):
+                if db.execute(f"SHOW COLUMNS FROM {table} LIKE 'owner_id'").fetchone() is None:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN owner_id INT NULL")
         else:
             db.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             CREATE TABLE IF NOT EXISTS documents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER,
                 name TEXT NOT NULL,
                 doc_type TEXT NOT NULL,
                 issue_date TEXT NOT NULL,
@@ -122,6 +148,7 @@ def initialize(seed_empty: bool = True) -> None:
             );
             CREATE TABLE IF NOT EXISTS renewals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER,
                 document_id INTEGER,
                 document_name TEXT NOT NULL DEFAULT '',
                 previous_issue_date TEXT NOT NULL,
@@ -131,9 +158,14 @@ def initialize(seed_empty: bool = True) -> None:
                 renewed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
         """)
+            for table in ("documents", "renewals"):
+                columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+                if "owner_id" not in columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN owner_id INTEGER")
         # Seed only an empty workspace, using fictional sample records to make
         # the dashboard and expiry windows immediately demonstrable.
-        if seed_empty and db.execute("SELECT COUNT(*) AS total FROM documents").fetchone()["total"] == 0:
+        users_total = db.execute("SELECT COUNT(*) AS total FROM users").fetchone()["total"]
+        if seed_empty and users_total == 0 and db.execute("SELECT COUNT(*) AS total FROM documents").fetchone()["total"] == 0:
             today = date.today()
             samples = [
                 ("City Driving Licence", "Driving licence", today - timedelta(days=730), today + timedelta(days=6)),
@@ -175,7 +207,7 @@ def serialize(row) -> dict:
 
 def documents() -> list[dict]:
     with connect() as db:
-        rows = db.execute("SELECT * FROM documents ORDER BY expiry_date, id").fetchall()
+        rows = db.execute("SELECT * FROM documents WHERE owner_id=? ORDER BY expiry_date, id", (session["user_id"],)).fetchall()
     return [serialize(row) for row in rows]
 
 
@@ -196,8 +228,90 @@ def error(message: str, status: int = 400):
 
 
 @app.get("/")
-def home():
-    return render_template("index.html", asset_version="20261109-color-refresh-v15")
+def backend_home():
+    return jsonify({"service": "Document Tracker API", "health": "/api/health", "frontend": FRONTEND_ORIGIN})
+
+
+@app.after_request
+def add_frontend_cors_headers(response):
+    if request.headers.get("Origin") == FRONTEND_ORIGIN:
+        response.headers["Access-Control-Allow-Origin"] = FRONTEND_ORIGIN
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Vary"] = "Origin"
+    return response
+
+
+PUBLIC_API_ENDPOINTS = {"register_account", "login_account", "logout_account", "current_session", "health"}
+
+
+@app.before_request
+def require_login_for_workspace_api():
+    if request.method == "OPTIONS":
+        return "", 204
+    if request.path.startswith("/api/") and request.endpoint not in PUBLIC_API_ENDPOINTS and not session.get("user_id"):
+        return error("Please log in to open your document workspace.", 401)
+
+
+@app.post("/api/register")
+def register_account():
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    email = str(data.get("email", "")).strip().lower()
+    password = str(data.get("password", ""))
+    if len(name) < 2 or len(name) > 80:
+        return error("Enter a name between 2 and 80 characters.")
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or len(email) > 254:
+        return error("Enter a valid email address.")
+    if len(password) < 8:
+        return error("Choose a password with at least 8 characters.")
+    with connect() as db:
+        if db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone():
+            return error("An account with this email already exists. Please log in.", 409)
+        first_account = db.execute("SELECT COUNT(*) AS total FROM users").fetchone()["total"] == 0
+        cursor = db.execute(
+            "INSERT INTO users(name, email, password_hash) VALUES (?, ?, ?)",
+            (name, email, generate_password_hash(password)),
+        )
+        user_id = cursor.lastrowid
+        if first_account:
+            # Preserve the existing single-user workspace when the first account is created.
+            db.execute("UPDATE documents SET owner_id=? WHERE owner_id IS NULL", (user_id,))
+            db.execute("UPDATE renewals SET owner_id=? WHERE owner_id IS NULL", (user_id,))
+    # Registration creates the account but leaves the user logged out so they
+    # can explicitly sign in using the login form.
+    session.clear()
+    return jsonify({"registered": True, "user": {"id": user_id, "name": name, "email": email}}), 201
+
+
+@app.post("/api/login")
+def login_account():
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email", "")).strip().lower()
+    password = str(data.get("password", ""))
+    with connect() as db:
+        user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+    if user is None or not check_password_hash(user["password_hash"], password):
+        return error("Email or password is incorrect.", 401)
+    session.clear()
+    session["user_id"] = user["id"]
+    session["user_name"] = user["name"]
+    return jsonify({"authenticated": True, "user": {"id": user["id"], "name": user["name"], "email": user["email"]}})
+
+
+@app.post("/api/logout")
+def logout_account():
+    session.clear()
+    return jsonify({"authenticated": False})
+
+
+@app.get("/api/session")
+def current_session():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"authenticated": False})
+    return jsonify({"authenticated": True, "user": {"id": user_id, "name": session.get("user_name", "")}})
 
 
 @app.get("/api/documents")
@@ -207,9 +321,13 @@ def list_documents():
 
 @app.get("/api/health")
 def health():
+    owner_id = session.get("user_id")
     with connect() as db:
-        total = db.execute("SELECT COUNT(*) AS total FROM documents").fetchone()["total"]
-        renewal_total = db.execute("SELECT COUNT(*) AS total FROM renewals").fetchone()["total"]
+        if owner_id:
+            total = db.execute("SELECT COUNT(*) AS total FROM documents WHERE owner_id=?", (owner_id,)).fetchone()["total"]
+            renewal_total = db.execute("SELECT COUNT(*) AS total FROM renewals WHERE owner_id=?", (owner_id,)).fetchone()["total"]
+        else:
+            total = renewal_total = 0
     result = {
         "status": "ok",
         "storage": "MySQL" if DATABASE_URL.startswith(("mysql://", "mysql+pymysql://")) else "SQLite",
@@ -252,16 +370,23 @@ def add_demo_data():
             ("Demo Vehicle Registration - Lakeside", "Vehicle registration", 90),
             ("Demo Travel Insurance - Orchard", "Travel insurance", 600),
             ("Demo First Aid Certificate - Pine", "Software certification", 45),
+            ("Demo Work Permit - Alder", "Work permit", 720),
+            ("Demo Equipment Warranty - Coral", "Warranty", 540),
+            ("Demo Professional Licence - Robin", "Professional licence", 800),
         ],
         "Expired": [
             ("Demo Expired Safety Certificate", "Certificate", -12),
             ("Demo Expired Travel Cover", "Travel insurance", -2),
+            ("Demo Expired Vehicle Registration - Bay", "Vehicle registration", -24),
         ],
         "Expiring Soon": [
             ("Demo Licence Renewal - Willow", "Driving licence", 3),
             ("Demo Vehicle Policy - Elm", "Vehicle insurance", 11),
             ("Demo Training Certificate - Birch", "Software certification", 18),
             ("Demo Passport Renewal - Aspen", "Passport", 26),
+            ("Demo Equipment Permit - Fern", "Permit", 8),
+            ("Demo Health Policy - Cove", "Health insurance", 29),
+            ("Demo Warranty Renewal - Stone", "Warranty", 14),
         ],
     }
     targets = {"Active": 15, "Expired": 3, "Expiring Soon": 7}
@@ -274,13 +399,13 @@ def add_demo_data():
             for name, doc_type, expiry_offset in records:
                 if needed == 0:
                     break
-                exists = db.execute("SELECT 1 FROM documents WHERE name=? AND doc_type=?", (name, doc_type)).fetchone()
+                exists = db.execute("SELECT 1 FROM documents WHERE owner_id=? AND name=? AND doc_type=?", (session["user_id"], name, doc_type)).fetchone()
                 if exists:
                     continue
                 expires = today + timedelta(days=expiry_offset)
                 issued = min(today - timedelta(days=365), expires - timedelta(days=90))
-                db.execute("INSERT INTO documents(name, doc_type, issue_date, expiry_date) VALUES (?, ?, ?, ?)",
-                           (name, doc_type, issued.isoformat(), expires.isoformat()))
+                db.execute("INSERT INTO documents(owner_id, name, doc_type, issue_date, expiry_date) VALUES (?, ?, ?, ?, ?)",
+                           (session["user_id"], name, doc_type, issued.isoformat(), expires.isoformat()))
                 inserted += 1
                 needed -= 1
     renewal_rows_added = add_demo_renewal_history()
@@ -299,10 +424,10 @@ def add_demo_renewal_history() -> int:
     added = 0
     with connect() as db:
         for name in example_names:
-            document = db.execute("SELECT * FROM documents WHERE name=? ORDER BY id LIMIT 1", (name,)).fetchone()
+            document = db.execute("SELECT * FROM documents WHERE owner_id=? AND name=? ORDER BY id LIMIT 1", (session["user_id"], name)).fetchone()
             if document is None:
                 continue
-            existing = db.execute("SELECT 1 FROM renewals WHERE document_id=? LIMIT 1", (document["id"],)).fetchone()
+            existing = db.execute("SELECT 1 FROM renewals WHERE owner_id=? AND document_id=? LIMIT 1", (session["user_id"], document["id"])).fetchone()
             if existing:
                 continue
             new_issue = date.fromisoformat(as_iso(document["issue_date"]))
@@ -310,8 +435,8 @@ def add_demo_renewal_history() -> int:
             previous_issue = new_issue - timedelta(days=730)
             previous_expiry = new_issue - timedelta(days=1)
             db.execute(
-                "INSERT INTO renewals(document_id, document_name, previous_issue_date, previous_expiry_date, new_issue_date, new_expiry_date, renewed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (document["id"], name, previous_issue.isoformat(), previous_expiry.isoformat(),
+                "INSERT INTO renewals(owner_id, document_id, document_name, previous_issue_date, previous_expiry_date, new_issue_date, new_expiry_date, renewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (session["user_id"], document["id"], name, previous_issue.isoformat(), previous_expiry.isoformat(),
                  new_issue.isoformat(), new_expiry.isoformat(), f"{new_issue.isoformat()} 09:00:00"),
             )
             added += 1
@@ -335,9 +460,9 @@ def add_document():
     if expiry < issue:
         return error("Expiry date cannot be earlier than issue date.")
     with connect() as db:
-        cursor = db.execute("INSERT INTO documents(name, doc_type, issue_date, expiry_date) VALUES (?, ?, ?, ?)",
-                             (name, doc_type, issue.isoformat(), expiry.isoformat()))
-        row = db.execute("SELECT * FROM documents WHERE id=?", (cursor.lastrowid,)).fetchone()
+        cursor = db.execute("INSERT INTO documents(owner_id, name, doc_type, issue_date, expiry_date) VALUES (?, ?, ?, ?, ?)",
+                             (session["user_id"], name, doc_type, issue.isoformat(), expiry.isoformat()))
+        row = db.execute("SELECT * FROM documents WHERE id=? AND owner_id=?", (cursor.lastrowid, session["user_id"])).fetchone()
     return jsonify(serialize(row)), 201
 
 
@@ -356,23 +481,23 @@ def update_document(document_id: int):
     if expiry < issue:
         return error("Expiry date cannot be earlier than issue date.")
     with connect() as db:
-        cursor = db.execute("UPDATE documents SET name=?, doc_type=?, issue_date=?, expiry_date=? WHERE id=?",
-                             (name, doc_type, issue.isoformat(), expiry.isoformat(), document_id))
+        cursor = db.execute("UPDATE documents SET name=?, doc_type=?, issue_date=?, expiry_date=? WHERE id=? AND owner_id=?",
+                             (name, doc_type, issue.isoformat(), expiry.isoformat(), document_id, session["user_id"]))
         if cursor.rowcount == 0:
             return error("Document not found.", 404)
-        row = db.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
+        row = db.execute("SELECT * FROM documents WHERE id=? AND owner_id=?", (document_id, session["user_id"])).fetchone()
     return jsonify(serialize(row))
 
 
 @app.delete("/api/documents/<int:document_id>")
 def delete_document(document_id: int):
     with connect() as db:
-        row = db.execute("SELECT name FROM documents WHERE id=?", (document_id,)).fetchone()
+        row = db.execute("SELECT name FROM documents WHERE id=? AND owner_id=?", (document_id, session["user_id"])).fetchone()
         if row is None:
             return error("Document not found.", 404)
         # Keep renewal history readable even after its document is removed.
-        db.execute("UPDATE renewals SET document_id=NULL, document_name=? WHERE document_id=?", (row["name"], document_id))
-        db.execute("DELETE FROM documents WHERE id=?", (document_id,))
+        db.execute("UPDATE renewals SET document_id=NULL, document_name=? WHERE document_id=? AND owner_id=?", (row["name"], document_id, session["user_id"]))
+        db.execute("DELETE FROM documents WHERE id=? AND owner_id=?", (document_id, session["user_id"]))
     return jsonify({"success": True})
 
 
@@ -387,21 +512,21 @@ def renew_document(document_id: int):
     if expiry < issue:
         return error("Expiry date cannot be earlier than issue date.")
     with connect() as db:
-        old = db.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
+        old = db.execute("SELECT * FROM documents WHERE id=? AND owner_id=?", (document_id, session["user_id"])).fetchone()
         if old is None:
             return error("Document not found.", 404)
-        db.execute("INSERT INTO renewals(document_id, document_name, previous_issue_date, previous_expiry_date, new_issue_date, new_expiry_date) VALUES (?, ?, ?, ?, ?, ?)",
-                   (document_id, old["name"], old["issue_date"], old["expiry_date"], issue.isoformat(), expiry.isoformat()))
-        db.execute("UPDATE documents SET issue_date=?, expiry_date=? WHERE id=?",
-                   (issue.isoformat(), expiry.isoformat(), document_id))
-        updated = db.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
+        db.execute("INSERT INTO renewals(owner_id, document_id, document_name, previous_issue_date, previous_expiry_date, new_issue_date, new_expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                   (session["user_id"], document_id, old["name"], old["issue_date"], old["expiry_date"], issue.isoformat(), expiry.isoformat()))
+        db.execute("UPDATE documents SET issue_date=?, expiry_date=? WHERE id=? AND owner_id=?",
+                   (issue.isoformat(), expiry.isoformat(), document_id, session["user_id"]))
+        updated = db.execute("SELECT * FROM documents WHERE id=? AND owner_id=?", (document_id, session["user_id"])).fetchone()
     return jsonify(serialize(updated))
 
 
 @app.get("/api/renewals")
 def renewal_history():
     with connect() as db:
-        rows = db.execute("SELECT r.*, COALESCE(d.name, r.document_name) AS document_name FROM renewals r LEFT JOIN documents d ON d.id=r.document_id ORDER BY r.renewed_at DESC, r.id DESC").fetchall()
+        rows = db.execute("SELECT r.*, COALESCE(d.name, r.document_name) AS document_name FROM renewals r LEFT JOIN documents d ON d.id=r.document_id WHERE r.owner_id=? ORDER BY r.renewed_at DESC, r.id DESC", (session["user_id"],)).fetchall()
     return jsonify([normalize_renewal(row) for row in rows])
 
 
@@ -419,7 +544,7 @@ def get_report(report_type: str):
         return error("Unknown report. Choose all, active, expired, 7, 15, 30, or renewals.", 404)
     if report_type == "renewals":
         with connect() as db:
-            rows = db.execute("SELECT r.*, COALESCE(d.name, r.document_name) AS document_name FROM renewals r LEFT JOIN documents d ON d.id=r.document_id ORDER BY r.renewed_at DESC, r.id DESC").fetchall()
+            rows = db.execute("SELECT r.*, COALESCE(d.name, r.document_name) AS document_name FROM renewals r LEFT JOIN documents d ON d.id=r.document_id WHERE r.owner_id=? ORDER BY r.renewed_at DESC, r.id DESC", (session["user_id"],)).fetchall()
         return jsonify({"type": "renewals", "count": len(rows), "items": [normalize_renewal(row) for row in rows]})
     items = report_documents(report_type)
     return jsonify({"type": report_type, "count": len(items), "items": items})
@@ -557,7 +682,7 @@ def report_xlsx():
 @app.get("/api/renewals.xlsx")
 def renewals_xlsx():
     with connect() as db:
-        rows = db.execute("SELECT r.*, COALESCE(d.name, r.document_name) AS document_name FROM renewals r LEFT JOIN documents d ON d.id=r.document_id ORDER BY r.renewed_at DESC, r.id DESC").fetchall()
+        rows = db.execute("SELECT r.*, COALESCE(d.name, r.document_name) AS document_name FROM renewals r LEFT JOIN documents d ON d.id=r.document_id WHERE r.owner_id=? ORDER BY r.renewed_at DESC, r.id DESC", (session["user_id"],)).fetchall()
     data = [[row["document_name"], date.fromisoformat(as_iso(row["previous_issue_date"])),
              date.fromisoformat(as_iso(row["previous_expiry_date"])), date.fromisoformat(as_iso(row["new_issue_date"])),
              date.fromisoformat(as_iso(row["new_expiry_date"])), date.fromisoformat(as_iso(row["renewed_at"])[:10])]
@@ -572,7 +697,7 @@ def renewals_csv():
     writer = csv.writer(output)
     writer.writerow(["Document", "Previous issue date", "Previous expiry date", "New issue date", "New expiry date", "Renewed at"])
     with connect() as db:
-        rows = db.execute("SELECT COALESCE(d.name, r.document_name) AS document_name, r.previous_issue_date, r.previous_expiry_date, r.new_issue_date, r.new_expiry_date, r.renewed_at FROM renewals r LEFT JOIN documents d ON d.id=r.document_id ORDER BY r.renewed_at DESC, r.id DESC").fetchall()
+        rows = db.execute("SELECT COALESCE(d.name, r.document_name) AS document_name, r.previous_issue_date, r.previous_expiry_date, r.new_issue_date, r.new_expiry_date, r.renewed_at FROM renewals r LEFT JOIN documents d ON d.id=r.document_id WHERE r.owner_id=? ORDER BY r.renewed_at DESC, r.id DESC", (session["user_id"],)).fetchall()
     for row in rows:
         writer.writerow([row["document_name"], row["previous_issue_date"], row["previous_expiry_date"], row["new_issue_date"], row["new_expiry_date"], row["renewed_at"]])
     response = make_response(output.getvalue())
@@ -587,4 +712,4 @@ if __name__ == "__main__":
         print("Document Tracker storage: configured MySQL database")
     else:
         print(f"Document Tracker storage: SQLite at {DB_PATH}")
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(host="127.0.0.1", port=PORT, debug=False)
