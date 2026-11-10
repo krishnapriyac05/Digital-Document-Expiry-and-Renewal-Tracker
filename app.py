@@ -209,11 +209,17 @@ def list_documents():
 def health():
     with connect() as db:
         total = db.execute("SELECT COUNT(*) AS total FROM documents").fetchone()["total"]
-    return jsonify({
+        renewal_total = db.execute("SELECT COUNT(*) AS total FROM renewals").fetchone()["total"]
+    result = {
         "status": "ok",
         "storage": "MySQL" if DATABASE_URL.startswith(("mysql://", "mysql+pymysql://")) else "SQLite",
         "document_count": total,
-    })
+        "renewal_count": renewal_total,
+    }
+    if not DATABASE_URL.startswith(("mysql://", "mysql+pymysql://")):
+        result["database_path"] = str(DB_PATH)
+        result["configuration_note"] = "MySQL is not configured; using the local SQLite database."
+    return jsonify(result)
 
 
 @app.get("/api/documents/search")
