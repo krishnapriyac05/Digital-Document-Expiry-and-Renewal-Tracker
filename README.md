@@ -59,9 +59,9 @@ The app adds four fictional sample documents when the selected database is empty
 
 ## Deploy on Render
 
-The repository includes `render.yaml` for a single Render web service. In Render, choose **New → Blueprint**, connect this GitHub repository, and deploy the `main` branch. The Blueprint serves the UI and API from the same HTTPS URL, initializes the database at startup, and stores SQLite at `/var/data/documents.db` on a persistent disk. After deployment, open the service URL; the health check is `/api/health`.
+The repository includes `render.yaml` for a single free Render web service. In Render, choose **New → Blueprint**, connect this GitHub repository, and deploy the `main` branch. The Blueprint serves the UI and API from the same HTTPS URL and initializes SQLite at startup. After deployment, open the service URL; the health check is `/api/health`.
 
-This SQLite configuration includes a persistent disk, which Render only supports on a paid web service. The service is configured as a single instance to avoid concurrent SQLite writes to a shared disk. Keep the generated `SECRET_KEY` value stable; changing it signs users out. Render deploys later pushes to the connected branch automatically.
+The free service uses Render's temporary filesystem, so SQLite accounts and document records may be lost after a restart or redeploy. Persistent disks require a paid service. Keep the generated `SECRET_KEY` value stable; changing it signs users out. Render deploys later pushes to the connected branch automatically.
 ## Main files
 
 - `app.py` — Flask app, validation, SQLite/MySQL storage, API, and CSV reports
