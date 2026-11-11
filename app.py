@@ -20,7 +20,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("DATABASE_PATH", str(BASE_DIR / "documents.db")))
-# Read a simple local .env file for MySQL configuration; never overwrite an
+# Read a simple local .env file for database configuration; never overwrite an
 # environment variable explicitly set by VS Code or the shell.
 ENV_FILE = BASE_DIR / ".env"
 if ENV_FILE.exists():
@@ -55,9 +55,76 @@ class MySQLConnection:
         return cursor
 
 
+class PostgresCursor:
+    def __init__(self, cursor, lastrowid=None):
+        self.cursor = cursor
+        self.lastrowid = lastrowid
+
+    def fetchone(self):
+        return self.cursor.fetchone()
+
+    def fetchall(self):
+        return self.cursor.fetchall()
+
+    @property
+    def rowcount(self):
+        return self.cursor.rowcount
+
+
+class PostgresConnection:
+    """Adapt PostgreSQL cursors and placeholders to the app's DB interface."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, sql, params=()):
+        statement = re.sub(r"\?", "%s", sql.strip().rstrip(";"))
+        is_insert = bool(re.match(r"INSERT\s+INTO\b", statement, re.IGNORECASE))
+        if is_insert and not re.search(r"\bRETURNING\b", statement, re.IGNORECASE):
+            statement += " RETURNING id"
+        cursor = self.connection.cursor()
+        cursor.execute(statement, params)
+        lastrowid = None
+        if is_insert:
+            row = cursor.fetchone()
+            lastrowid = row["id"]
+        return PostgresCursor(cursor, lastrowid)
+
+
+def is_mysql():
+    return DATABASE_URL.startswith(("mysql://", "mysql+pymysql://"))
+
+
+def is_postgres():
+    return DATABASE_URL.startswith(("postgres://", "postgresql://", "postgresql+psycopg://"))
+
+
 @contextmanager
 def connect():
-    if DATABASE_URL.startswith(("mysql://", "mysql+pymysql://")):
+    if DATABASE_URL and not (is_postgres() or is_mysql()):
+        raise RuntimeError("DATABASE_URL must use PostgreSQL or MySQL; refusing to fall back to temporary SQLite storage.")
+    if is_postgres():
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError("PostgreSQL mode needs psycopg. Install requirements.txt.") from exc
+        database_url = DATABASE_URL.replace("postgresql+psycopg://", "postgresql://", 1)
+        if database_url.startswith("postgres://"):
+            database_url = "postgresql://" + database_url[len("postgres://"):]
+        raw = psycopg.connect(database_url, row_factory=dict_row)
+        db = PostgresConnection(raw)
+        try:
+            yield db
+            raw.commit()
+        except Exception:
+            raw.rollback()
+            raise
+        finally:
+            raw.close()
+        return
+
+    if is_mysql():
         try:
             import pymysql
             from pymysql.cursors import DictCursor
@@ -100,7 +167,37 @@ def connect():
 
 def initialize(seed_empty: bool = True) -> None:
     with connect() as db:
-        if DATABASE_URL.startswith(("mysql://", "mysql+pymysql://")):
+        if is_postgres():
+            db.execute("""CREATE TABLE IF NOT EXISTS users (
+                id BIGSERIAL PRIMARY KEY,
+                name VARCHAR(80) NOT NULL,
+                email VARCHAR(254) NOT NULL UNIQUE,
+                password_hash VARCHAR(255) NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP::text
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS documents (
+                id BIGSERIAL PRIMARY KEY,
+                owner_id BIGINT NULL,
+                name VARCHAR(100) NOT NULL,
+                doc_type VARCHAR(60) NOT NULL,
+                issue_date TEXT NOT NULL,
+                expiry_date TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP::text
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS renewals (
+                id BIGSERIAL PRIMARY KEY,
+                owner_id BIGINT NULL,
+                document_id BIGINT NULL,
+                document_name VARCHAR(100) NOT NULL DEFAULT '',
+                previous_issue_date TEXT NOT NULL,
+                previous_expiry_date TEXT NOT NULL,
+                new_issue_date TEXT NOT NULL,
+                new_expiry_date TEXT NOT NULL,
+                renewed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP::text
+            )""")
+            for table in ("documents", "renewals"):
+                db.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS owner_id BIGINT NULL")
+        elif is_mysql():
             db.execute("""CREATE TABLE IF NOT EXISTS users (
                 id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(80) NOT NULL,
@@ -348,13 +445,13 @@ def health():
             total = renewal_total = 0
     result = {
         "status": "ok",
-        "storage": "MySQL" if DATABASE_URL.startswith(("mysql://", "mysql+pymysql://")) else "SQLite",
+        "storage": "PostgreSQL" if is_postgres() else "MySQL" if is_mysql() else "SQLite",
         "document_count": total,
         "renewal_count": renewal_total,
     }
-    if not DATABASE_URL.startswith(("mysql://", "mysql+pymysql://")):
+    if not is_mysql() and not is_postgres():
         result["database_path"] = str(DB_PATH)
-        result["configuration_note"] = "MySQL is not configured; using the local SQLite database."
+        result["configuration_note"] = "DATABASE_URL is not configured; using the local SQLite database."
     return jsonify(result)
 
 
@@ -726,7 +823,9 @@ def renewals_csv():
 
 if __name__ == "__main__":
     initialize()
-    if DATABASE_URL.startswith(("mysql://", "mysql+pymysql://")):
+    if is_postgres():
+        print("Document Tracker storage: configured PostgreSQL database")
+    elif is_mysql():
         print("Document Tracker storage: configured MySQL database")
     else:
         print(f"Document Tracker storage: SQLite at {DB_PATH}")

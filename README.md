@@ -1,11 +1,11 @@
 # Validity — Digital Document Expiry and Renewal Tracker
 
-A browser-based app for tracking document dates. Create an account or log in to open a private workspace; accounts and document records stay in the configured database on this computer. Python/Flask provides the backend, MySQL can store the records when configured, and SQLite is the zero-configuration local fallback. The app does not store identification numbers, accept document uploads, or connect to government services.
+A browser-based app for tracking document dates. Create an account or log in to open a private workspace; accounts and document records stay in the configured database. Python/Flask provides the backend, PostgreSQL or MySQL can store records when configured, and SQLite is the zero-configuration local fallback. The app does not store identification numbers, accept document uploads, or connect to government services.
 
 ## Project phases
 
 1. **Plan the data:** Documents have a unique database ID, name, type, issue date, and expiry date. Renewals keep both the old and new validity periods.
-2. **Build the backend:** Flask provides routes for adding, editing, deleting, renewing, searching/listing, reading history, and generating each named report from the same status calculation. Configure MySQL with `DATABASE_URL` in `.env` to use MySQL storage.
+2. **Build the backend:** Flask provides routes for adding, editing, deleting, renewing, searching/listing, reading history, and generating each named report from the same status calculation. Configure PostgreSQL or MySQL with `DATABASE_URL` to use a server database.
 3. **Build the interface:** The responsive blue/navy dashboard shows counts, searchable/filterable document lists, expiry windows, edit and renewal forms, and renewal history.
 4. **Build reports:** Dedicated report tabs show all, active, expired, and documents expiring within 7, 15, and 30 days, plus renewal history. Both status and renewal reports can be downloaded as CSV.
 5. **Check the rules:** Dates are validated, expiry cannot precede issue, remaining days are calculated from the computer's local date, and 7/15/30-day reports include documents expiring within the selected number of days.
@@ -13,7 +13,7 @@ A browser-based app for tracking document dates. Create an account or log in to 
 
 ## Requirements checklist
 
-- [x] Unique auto-incrementing ID for every document (SQLite or MySQL)
+- [x] Unique auto-incrementing ID for every document (SQLite, PostgreSQL, or MySQL)
 - [x] Add, view, update, search, and delete documents
 - [x] Store issue and expiry dates
 - [x] Reject invalid dates and expiry dates earlier than issue dates
@@ -53,20 +53,20 @@ Then open `http://127.0.0.1:5500` in your browser. Keep both terminals open whil
 
 Install Python 3.10 or newer if needed. Install project dependencies with `python -m pip install -r requirements.txt`. If using MySQL, copy `.env.example` to `.env`, configure the database URL, and create the database; the app creates its tables automatically. To move existing SQLite documents and renewals, run `python migrate_sqlite_to_mysql.py` once after configuring MySQL. If `DATABASE_URL` is blank, the app saves data in `documents.db` beside `app.py`.
 
-The backend stores account credentials as password hashes, document details (including vehicle insurance and vehicle registration documents), and renewal history. SQLite is the default persistent storage; MySQL can be configured for shared storage. The app binds only to your own computer (`127.0.0.1`).
+The backend stores account credentials as password hashes, document details (including vehicle insurance and vehicle registration documents), and renewal history. SQLite is the local default; MySQL or PostgreSQL can be configured with `DATABASE_URL`. The app binds only to your own computer (`127.0.0.1`) when run locally.
 
 The app adds four fictional sample documents when the selected database is empty. You can also use **Load fictional examples** in Recent Documents to add them to an existing workspace; duplicate sample names are skipped and existing records are not modified.
 
 ## Deploy on Render
 
-The repository includes `render.yaml` for a single free Render web service. In Render, choose **New → Blueprint**, connect this GitHub repository, and deploy the `main` branch. The Blueprint serves the UI and API from the same HTTPS URL and initializes SQLite at startup. After deployment, open the service URL; the health check is `/api/health`.
+The repository includes `render.yaml` for a single free Render web service. In Render, choose **New → Blueprint**, connect this GitHub repository, and deploy the `main` branch. The Blueprint serves the UI and API from the same HTTPS URL. After deployment, open the service URL; the health check is `/api/health`.
 
-The free service uses Render's temporary filesystem, so SQLite accounts and document records may be lost after a restart or redeploy. Persistent disks require a paid service. Keep the generated `SECRET_KEY` value stable; changing it signs users out. Render deploys later pushes to the connected branch automatically.
+The free service uses Render's temporary filesystem, so SQLite accounts and document records may be lost after a restart or redeploy. For persistent account and document storage without a paid Render disk, create a PostgreSQL database with a provider you choose, then add its connection URL as the `DATABASE_URL` environment variable in the Render web service. The backend creates its PostgreSQL tables automatically at startup. Keep the generated `SECRET_KEY` value stable; changing it signs users out. Render deploys later pushes to the connected branch automatically.
 ## Main files
 
-- `app.py` — Flask app, validation, SQLite/MySQL storage, API, and CSV reports
+- `app.py` — Flask app, validation, SQLite/PostgreSQL/MySQL storage, API, and CSV reports
 - `frontend_server.py` — local frontend server on port 5500
-- `render.yaml` — Render web service, health check, secrets, and persistent database disk
+- `render.yaml` — free Render web service and health check
 - `migrate_sqlite_to_mysql.py` — one-time migration for existing SQLite documents and renewal history
 - `templates/index.html` — page structure and forms
 - `static/styles.css` — responsive styling
