@@ -28,28 +28,16 @@ A browser-based app for tracking document dates. Create an account or log in to 
 
 ## Start the app on Windows
 
-Double-click `start_tracker.bat`. It checks the Python dependencies, starts the backend and frontend separately, waits for both to respond, and opens the frontend. Keep both server windows open while using the app.
+Double-click `start_tracker.bat` to start the app, or open a terminal in this folder and run `python app.py`. Flask serves the styled web interface and API together; keep the server window open while using the app.
 
-- Frontend: `http://127.0.0.1:5500`
-- Backend health: `http://127.0.0.1:5051/api/health`
-
-To start manually, open two terminals in this folder. In the first terminal, run:
+- App: `http://127.0.0.1:5000`
+- Backend health: `http://127.0.0.1:5000/api/health`
 
 ```powershell
-$env:PORT = "5051"
-$env:FRONTEND_ORIGIN = "http://127.0.0.1:5500"
 python app.py
 ```
 
-In the second terminal, run:
-
-```powershell
-$env:FRONTEND_PORT = "5500"
-$env:BACKEND_PORT = "5051"
-python frontend_server.py
-```
-
-Then open `http://127.0.0.1:5500` in your browser. Keep both terminals open while using the app; press Ctrl+C in each to stop the services.
+Open `http://127.0.0.1:5000` in your browser. Keep the terminal open while using the app; press Ctrl+C there to stop the server.
 
 Install Python 3.10 or newer if needed. Install project dependencies with `python -m pip install -r requirements.txt`. If using MySQL, copy `.env.example` to `.env`, configure the database URL, and create the database; the app creates its tables automatically. To move existing SQLite documents and renewals, run `python migrate_sqlite_to_mysql.py` once after configuring MySQL. If `DATABASE_URL` is blank, the app saves data in `documents.db` beside `app.py`.
 

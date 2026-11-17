@@ -30,9 +30,9 @@ if ENV_FILE.exists():
             key, value = line.split("=", 1)
             os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
-PORT = int(os.environ.get("PORT", "5051"))
+PORT = int(os.environ.get("PORT", "5000"))
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://127.0.0.1:5500")
-SERVE_FRONTEND = os.environ.get("SERVE_FRONTEND", "false").lower() in {"1", "true", "yes"}
+SERVE_FRONTEND = os.environ.get("SERVE_FRONTEND", "true").lower() in {"1", "true", "yes"}
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 app.config.update(

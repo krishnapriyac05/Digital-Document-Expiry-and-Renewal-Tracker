@@ -4,7 +4,8 @@
     {
       "label": "Run Document Tracker",
       "type": "process",
-      "command": "${workspaceFolder}\\start_tracker.bat",
+      "command": "python",
+      "args": ["app.py"],
       "options": {
         "cwd": "${workspaceFolder}"
       },
