@@ -39,6 +39,10 @@ python app.py
 
 Open `http://127.0.0.1:5000` in your browser. Keep the terminal open while using the app; press Ctrl+C there to stop the server.
 
+### Forgot your local account password?
+
+From another terminal in this project folder, run `python reset_password.py`. Enter the account email and choose a new password when prompted. Password input is hidden. This updates the password in the same database configured for the app; it does not change or remove document records.
+
 Install Python 3.10 or newer if needed. Install project dependencies with `python -m pip install -r requirements.txt`. If using MySQL, copy `.env.example` to `.env`, configure the database URL, and create the database; the app creates its tables automatically. To move existing SQLite documents and renewals, run `python migrate_sqlite_to_mysql.py` once after configuring MySQL. If `DATABASE_URL` is blank, the app saves data in `documents.db` beside `app.py`.
 
 The backend stores account credentials as password hashes, document details (including vehicle insurance and vehicle registration documents), and renewal history. SQLite is the local default; MySQL or PostgreSQL can be configured with `DATABASE_URL`. The app binds only to your own computer (`127.0.0.1`) when run locally.
